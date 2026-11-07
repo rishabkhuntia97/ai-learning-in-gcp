@@ -30,4 +30,5 @@ Check that today's folder is on GitHub, then delete the instance.
 
 | Date | Topic | Link |
 |---|---|---|
+| 2026-11-06 | Gen AI SDK on Vertex AI: Text Prompts, System Instructions, Chat, Structured Output, Streaming, Async & Count Tokens | [open](days/2026-11-06-genai-sdk-text-prompt-system-instruction-chat-structured-output-streaming-async-count-tokens) |
 | 2026-11-08 | Gen AI SDK on Vertex AI: Chat, Count Tokens, Structured Output, Google Search & Function Calling | [open](days/2026-11-08-genai-sdk-chat-count-tokens-structured-output-google-search-function-calling) |
