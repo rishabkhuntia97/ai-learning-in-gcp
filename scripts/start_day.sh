@@ -4,9 +4,10 @@ set -e
 TOPIC="${1:?Usage: bash scripts/start_day.sh <topic-name>}"
 TOPIC=$(echo "$TOPIC" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
 
-# Fresh instance each day, so set git identity if missing
-git config --global user.name  >/dev/null || read -rp "Git name: "  n && git config --global user.name  "${n:-$(git config --global user.name)}"
-git config --global user.email >/dev/null || read -rp "Git email: " e && git config --global user.email "${e:-$(git config --global user.email)}"
+# Fresh instance each day, so set git identity.
+# Uses GitHub's private noreply email so your real email never appears in this public repo.
+git config --global user.name  "Rishab Khuntia"
+git config --global user.email "118143011+rishabkhuntia97@users.noreply.github.com"
 git config --global credential.helper 'cache --timeout=43200'   # remember token for 12h
 
 cd "$(git rev-parse --show-toplevel)"
