@@ -1,0 +1,22 @@
+# Jupyter / Python
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+.venv/
+
+# Data (keep in Cloud Storage, not git)
+data/*
+!data/.gitkeep
+*.csv
+*.parquet
+*.pkl
+*.h5
+*.pt
+*.safetensors
+
+# Secrets
+.env
+*.key
+*.json.key
+service-account*.json
+credentials*.json
