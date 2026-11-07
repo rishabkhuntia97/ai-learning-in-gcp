@@ -16,7 +16,7 @@ My daily log of learning AI on Google Cloud. Each day gets its own folder with t
 
 **Start of day** (on a fresh instance):
 ```bash
-git clone https://github.com/rishabkhuntia12/ai-learning-in-gcp.git && cd ai-learning-in-gcp && bash scripts/start_day.sh "topic-name"
+git clone https://github.com/rishabkhuntia97/ai-learning-in-gcp.git && cd ai-learning-in-gcp && bash scripts/start_day.sh "topic-name"
 ```
 Create today's notebooks inside the folder it prints.
 
