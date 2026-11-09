@@ -30,3 +30,4 @@ Check that today's folder is on GitHub, then delete the instance.
 
 | Date | Topic | Link |
 |---|---|---|
+| 2026-11-08 | Vertex AI: Google Gen AI SDK basics (chat, structured output, Search grounding, function calling) | [open](days/2026-11-08-vertex-ai-genai-sdk-basics) |
