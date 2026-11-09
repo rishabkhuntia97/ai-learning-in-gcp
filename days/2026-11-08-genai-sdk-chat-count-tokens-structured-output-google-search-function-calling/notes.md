@@ -1,6 +1,6 @@
-# 2026-11-08 — Vertex AI: Google Gen AI SDK basics
+# 2026-11-08 — Gen AI SDK on Vertex AI: Chat, Count Tokens, Structured Output, Google Search & Function Calling
 
-**Notebook:** [genai-sdk-practice-1.ipynb](genai-sdk-practice-1.ipynb)
+**Notebook:** [genai-sdk-chat-count-tokens-structured-output-google-search-function-calling.ipynb](genai-sdk-chat-count-tokens-structured-output-google-search-function-calling.ipynb)
 **Environment:** Vertex AI Workbench, Python 3.12
 **Model:** `gemini-3.1-flash-lite`, location `global`
 **SDK:** `google-genai` (`from google import genai`)
