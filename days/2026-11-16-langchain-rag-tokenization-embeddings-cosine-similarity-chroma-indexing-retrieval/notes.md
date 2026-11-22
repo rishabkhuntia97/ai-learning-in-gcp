@@ -85,9 +85,9 @@ The two counts happen to match for this sentence. In general, each model family 
 
 ---
 
-## Continued on 2026-11-21: Generation & Query Translation (Parts 4–9)
+## Continued on 2026-11-21: Generation, Query Translation & Routing (Parts 4–10)
 
-**Summary:** I finished the basic RAG loop with **Part 4 (Generation)**, then moved on to **query translation**: rewriting or expanding the user's question before retrieval, so the vector search finds better chunks. I wrote all five techniques from the tutorial (Parts 5–9), moved each from OpenAI to Gemini, and fixed a few issues along the way. The retriever is still `k=1`, so each query brings back one chunk.
+**Summary:** I finished the basic RAG loop with **Part 4 (Generation)**, then moved on to **query translation**: rewriting or expanding the user's question before retrieval, so the vector search finds better chunks. I wrote all five techniques from the tutorial (Parts 5–9), moved each from OpenAI to Gemini, and fixed a few issues along the way. The retriever is still `k=1`, so each query brings back one chunk. I finished with **Part 10 (Routing)**: sending a question to the right data source or prompt, by LLM classification (logical) or by embedding similarity (semantic).
 
 | Part | Technique | Idea in one line | Status in my notebook |
 |---|---|---|---|
@@ -97,6 +97,7 @@ The two counts happen to match for this sentence. In general, each model family 
 | 7 | Decomposition | Split into sub-questions → answer one at a time, feeding earlier Q&A forward | Code written, no saved outputs |
 | 8 | Step-Back | Ask a more general "step-back" question, then retrieve for **both** questions | Ran ✅ |
 | 9 | HyDE | LLM writes a hypothetical answer passage → retrieve using that passage | Ran ✅ |
+| 10 | Routing (logical + semantic) | Pick the data source / prompt: LLM structured output, or closest prompt embedding | Ran ✅ |
 
 ### Part 4: Generation
 ```python
@@ -139,6 +140,31 @@ chain.invoke({"context": docs, "question": "What is Task Decomposition?"})
 - The generated passage was long and academic. Retrieval with it found the blog's **"Component One: Planning / Task Decomposition"** chunk, and the final answer was grounded in it.
 - `safe_hyde` guard: if the passage is blank, fall back to the question. The retrieval chain is named `retrieval_chain_hyde` so it doesn't overwrite the multi-query chain.
 
+### Part 10: Routing
+Routing decides **where a question should go** before retrieval or generation.
+
+**Logical routing (LLM decides):**
+```python
+class RouteQuery(BaseModel):
+    datasource: Literal["python_docs", "js_docs", "golang_docs"] = Field(..., description="...")
+
+structured_llm = router_llm.with_structured_output(RouteQuery)
+router = prompt_route | structured_llm
+full_chain = router | RunnableLambda(choose_route)
+```
+- `with_structured_output` makes Gemini return a `RouteQuery` object instead of text. The `Literal` type limits it to the three allowed values.
+- A question with LangChain Python code → `RouteQuery(datasource='python_docs')`, and `full_chain` returned **"chain for python_docs"**.
+- `choose_route` is a plain function wrapped in `RunnableLambda`. In a real app each branch would return a different retrieval chain.
+- Moved from the tutorial: `langchain_core.pydantic_v1` was removed in newer langchain-core, so I import `BaseModel, Field` straight from `pydantic`.
+
+**Semantic routing (embeddings decide):**
+- Embed two prompt templates (physics professor, mathematician) once with `embed_documents`.
+- For each question, `embed_query` it, compute cosine similarity against both prompt embeddings, and use the prompt with the highest score (`argmax`).
+- I wrote my own NumPy `cosine_similarity(X, Y)`: normalise each row to length 1, then `X @ Y.T` gives every pairwise similarity at once.
+- "What's a black hole" → **Using PHYSICS**, and the answer was a short, simple explanation in the professor's style ("the ultimate cosmic trapdoor").
+
+**Logical vs semantic:** logical routing costs one LLM call but can reason about the question; semantic routing is just embeddings and a dot product, so it's cheaper and faster but only as good as how distinct the route descriptions are.
+
 ### Gotchas (21 Nov)
 - **Part 5, `print(docs.text)` will fail:** `docs` is a list of Documents, so use `for d in docs: print(d.page_content)`.
 - **Run order matters:** Parts 5–7 reuse names like `llm`, `prompt`, `generate_queries`, `docs` and `final_rag_chain`. Running parts out of order quietly uses the wrong object, which is why I gave HyDE its own chain name.
@@ -146,10 +172,14 @@ chain.invoke({"context": docs, "question": "What is Task Decomposition?"})
 - **The Part 4 LLM was created without `vertexai=True`.** It still worked, but the other parts pass it explicitly, which is safer.
 - **The temperature warning** appears on every call: `gemini-3.5-flash-lite` ignores `temperature`.
 - Typos in prompts ("Answert", "useer", "militations"). The model copes, but it's worth cleaning up.
+- **Part 10, `choose_route`'s `else` branch** returns `"golang_docs"`, not `"chain for golang_docs"` like the other two. Harmless here, but inconsistent.
+- **Part 10 reuses `router_llm`** for the semantic chain's answer, so the temperature warning shows up there too.
 
 ### Next time
 - [ ] Run Parts 5, 6 and 7 and save the outputs.
 - [ ] Fix `print(docs.text)` in Part 5.
 - [ ] Raise `k` to 3–5 and compare answers for single-query, Multi-Query, Fusion, Step-Back and HyDE on the same question.
 - [ ] Compare token usage (LangSmith traces or `usage_metadata`) between single and multi-query.
-- [ ] Next in the tutorial: **routing** (logical and semantic) and **query construction**.
+- [ ] Make each routing branch return a real retrieval chain (e.g. a separate vector store per docs source).
+- [ ] Try semantic routing on a question that's both math and physics, and print the two similarity scores.
+- [ ] Next in the tutorial: **query construction** (turning a question into metadata filters).
