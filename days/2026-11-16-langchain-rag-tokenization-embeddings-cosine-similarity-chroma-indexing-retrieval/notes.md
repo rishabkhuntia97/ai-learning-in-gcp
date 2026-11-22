@@ -82,3 +82,74 @@ The two counts happen to match for this sentence. In general, each model family 
 - [ ] Finish **Part 3 Retrieval**: try different `k` values and look at which chunks come back.
 - [ ] **Part 4 Generation:** connect the retriever to the prompt and LLM step by step, and check traces in LangSmith.
 - [ ] Try `langchain-chroma` instead of `langchain_community.vectorstores.Chroma`.
+
+---
+
+## Continued on 2026-11-21: Generation & Query Translation (Parts 4–9)
+
+**Summary:** I finished the basic RAG loop with **Part 4 (Generation)**, then moved on to **query translation**: rewriting or expanding the user's question before retrieval, so the vector search finds better chunks. I wrote all five techniques from the tutorial (Parts 5–9), moved each from OpenAI to Gemini, and fixed a few issues along the way. The retriever is still `k=1`, so each query brings back one chunk.
+
+| Part | Technique | Idea in one line | Status in my notebook |
+|---|---|---|---|
+| 4 | Generation | Put retrieved chunks into a prompt, then the LLM answers | Ran ✅ |
+| 5 | Multi-Query | LLM writes 5 versions of the question → retrieve for each → unique union | Code written, no saved outputs |
+| 6 | RAG Fusion | Several queries → combine the ranked lists with **Reciprocal Rank Fusion** | Code written, no saved outputs |
+| 7 | Decomposition | Split into sub-questions → answer one at a time, feeding earlier Q&A forward | Code written, no saved outputs |
+| 8 | Step-Back | Ask a more general "step-back" question, then retrieve for **both** questions | Ran ✅ |
+| 9 | HyDE | LLM writes a hypothetical answer passage → retrieve using that passage | Ran ✅ |
+
+### Part 4: Generation
+```python
+prompt = ChatPromptTemplate.from_template("Answer the question based only on the following context:\n{context}\n\nQuestion: {question}")
+chain = prompt | llm
+chain.invoke({"context": docs, "question": "What is Task Decomposition?"})
+```
+- The answer came only from the retrieved chunk: task decomposition is done (1) by an LLM with simple prompting, (2) with task-specific instructions, or (3) with human input.
+- The `AIMessage.content` from this model is a **list of parts**, not a plain string. Use `result.content[0]["text"]`, or add `StrOutputParser()` to get plain text.
+- A test I set up but haven't run: give it unrelated context ("Cats are mammals.") to check that the model admits it doesn't know.
+
+### Part 5: Multi-Query
+- The prompt asks for **5 alternative phrasings** to get past the limits of distance-based similarity search.
+- `generate_queries | retriever.map() | get_unique_union`: `.map()` runs the retriever once per query. `get_unique_union` removes duplicates by serialising documents with `dumps` and `loads`.
+- The final chain feeds `retrieval_chain` into `{context}` and uses `itemgetter("question")` for `{question}`.
+- My own note to try: compare **token usage** between single-query and multi-query retrieval.
+
+### Part 6: RAG Fusion
+- 4 generated queries → one ranked list of chunks for each query → **Reciprocal Rank Fusion**:
+  `score(doc) = Σ 1 / (rank + k)` over every list the doc appears in, with `k = 60`.
+  Chunks that rank well across many queries end up on top.
+- My version keys documents on `(page_content, source)` instead of `dumps()`, and keeps the original `Document` objects.
+- `fused_to_context` drops the scores and joins the text before it goes into the prompt.
+
+### Part 7: Decomposition
+- The LLM splits "What are the main components of an LLM-powered autonomous agent system?" into **3 sub-questions**.
+- A loop answers each sub-question with its own retrieval, plus all **earlier Q&A pairs** as background (`q_a_pairs`), so later answers build on earlier ones. The last `answer` is the final response.
+- I added `format_docs` so the prompt gets clean text instead of `Document(...)` reprs.
+
+### Part 8: Step-Back
+- **Few-shot prompting** with `FewShotChatMessagePromptTemplate`: two example pairs teach the model to turn a specific question into a more general one.
+- "What is task decomposition for LLM agents?" → step-back question **"what is task decomposition?"**
+- The final chain retrieves for **both** the original question (`normal_context`) and the step-back question (`step_back_context`), then answers using both.
+- **Debugging I added:**
+  - A `tap()` RunnableLambda that prints the query going into each retriever.
+  - A `safe_step_back` guard that falls back to the original question if the step-back output is blank. I checked the raw response: `finish_reason: STOP`, 88 input / 5 output tokens, and the text wasn't blank on that run.
+
+### Part 9: HyDE (Hypothetical Document Embeddings)
+- Questions and documents read differently, so HyDE has the LLM write a **"scientific paper passage"** answering the question, then searches with that passage instead of the question. A passage-shaped query sits closer to real passages in embedding space.
+- The generated passage was long and academic. Retrieval with it found the blog's **"Component One: Planning / Task Decomposition"** chunk, and the final answer was grounded in it.
+- `safe_hyde` guard: if the passage is blank, fall back to the question. The retrieval chain is named `retrieval_chain_hyde` so it doesn't overwrite the multi-query chain.
+
+### Gotchas (21 Nov)
+- **Part 5, `print(docs.text)` will fail:** `docs` is a list of Documents, so use `for d in docs: print(d.page_content)`.
+- **Run order matters:** Parts 5–7 reuse names like `llm`, `prompt`, `generate_queries`, `docs` and `final_rag_chain`. Running parts out of order quietly uses the wrong object, which is why I gave HyDE its own chain name.
+- **`k=1` limits these techniques:** each query returns only one chunk, so Multi-Query and Fusion can't gather much. Try `k=3`–`5`.
+- **The Part 4 LLM was created without `vertexai=True`.** It still worked, but the other parts pass it explicitly, which is safer.
+- **The temperature warning** appears on every call: `gemini-3.5-flash-lite` ignores `temperature`.
+- Typos in prompts ("Answert", "useer", "militations"). The model copes, but it's worth cleaning up.
+
+### Next time
+- [ ] Run Parts 5, 6 and 7 and save the outputs.
+- [ ] Fix `print(docs.text)` in Part 5.
+- [ ] Raise `k` to 3–5 and compare answers for single-query, Multi-Query, Fusion, Step-Back and HyDE on the same question.
+- [ ] Compare token usage (LangSmith traces or `usage_metadata`) between single and multi-query.
+- [ ] Next in the tutorial: **routing** (logical and semantic) and **query construction**.
