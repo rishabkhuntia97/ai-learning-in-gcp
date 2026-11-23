@@ -183,3 +183,57 @@ full_chain = router | RunnableLambda(choose_route)
 - [ ] Make each routing branch return a real retrieval chain (e.g. a separate vector store per docs source).
 - [ ] Try semantic routing on a question that's both math and physics, and print the two similarity scores.
 - [ ] Next in the tutorial: **query construction** (turning a question into metadata filters).
+
+---
+
+## Continued on 2026-11-23: Query Structuring (Part 11)
+
+**Summary:** Query structuring (also called query construction) turns a plain-English question into a **structured database query**: a text search plus **metadata filters** such as view count, publish date and video length. The LLM fills in a Pydantic schema, so "videos published in 2023" becomes real date filters instead of just words in a similarity search.
+
+### Loading YouTube metadata (didn't work)
+- Installed `youtube-transcript-api` and `pytube`, then tried `YoutubeLoader.from_youtube_url(..., add_video_info=True)`.
+- It failed with **`HTTPError: HTTP Error 400: Bad Request`**. `add_video_info=True` uses `pytube` to read the title, views and length, and pytube 15.0.0 often breaks when YouTube changes its site. The rest of Part 11 doesn't need this cell.
+
+### The schema: `TutorialSearch`
+```python
+class TutorialSearch(BaseModel):
+    content_search: str            # similarity search over transcripts
+    title_search: str              # short keyword version for titles
+    min_view_count: Optional[int] = None
+    max_view_count: Optional[int] = None
+    earliest_publish_date: Optional[datetime.date] = None   # inclusive
+    latest_publish_date: Optional[datetime.date] = None     # exclusive
+    min_length_sec: Optional[int] = None
+    max_length_sec: Optional[int] = None
+```
+- Each field's `description` tells the LLM what it means, and the filters say "Only use if explicitly specified", so the model leaves them empty unless the question asks for one.
+- `pretty_print()` shows only the fields that were filled in. I moved it from the deprecated `self.__fields__` to pydantic v2's `type(self).model_fields`, and imported from `pydantic` instead of `langchain_core.pydantic_v1`.
+
+### The query analyzer
+```python
+structured_llm = llm_structured.with_structured_output(TutorialSearch)
+query_analyzer = prompt_structured | structured_llm
+```
+The system prompt says to convert questions into database queries and **not to rephrase unfamiliar acronyms or words**.
+
+| Question | What Gemini returned |
+|---|---|
+| "rag from scratch" | content and title search `rag from scratch`, no filters |
+| "videos on chat langchain published in 2023" | search `chat langchain`, `earliest_publish_date: 2023-01-01`, `latest_publish_date: 2024-01-01` |
+| "…chat langchain that are published before 2024" | search `chat langchain`, only `latest_publish_date: 2024-01-01` |
+| "how to use multi-modal models in an agent, only videos under 5 minutes" | content search the full phrase, title search `multi-modal models agent`, `max_length_sec: 300` |
+
+- "In 2023" became a **date range** (1 Jan 2023 up to, but not including, 1 Jan 2024), which matches the inclusive/exclusive rules in the field descriptions.
+- "Under 5 minutes" became **300 seconds**: the model did the unit conversion.
+- The title search is shorter than the content search, as its description asks.
+
+### Gotchas (23 Nov)
+- **`YoutubeLoader` with `add_video_info=True` gave HTTP 400** (pytube). Try `add_video_info=False`, or get the metadata another way.
+- **`pip install` inside a notebook:** restart the kernel afterwards. `%pip install` is safer than `pip install` because it installs into the kernel's own environment.
+- The temperature warning again: `gemini-3.5-flash-lite` ignores `temperature=0`.
+
+### Next time
+- [ ] Get the YouTube loader working (`add_video_info=False`, or a newer pytube fork) and look at real metadata.
+- [ ] Turn the `TutorialSearch` output into a real Chroma `where` filter, and run a filtered search.
+- [ ] Try LangChain's `SelfQueryRetriever`, which does query structuring and filtering in one step.
+- [ ] Next in the tutorial: **indexing techniques** (multi-representation, RAPTOR, ColBERT).
