@@ -237,3 +237,102 @@ The system prompt says to convert questions into database queries and **not to r
 - [ ] Turn the `TutorialSearch` output into a real Chroma `where` filter, and run a filtered search.
 - [ ] Try LangChain's `SelfQueryRetriever`, which does query structuring and filtering in one step.
 - [ ] Next in the tutorial: **indexing techniques** (multi-representation, RAPTOR, ColBERT).
+
+---
+
+## Continued on 2026-11-25: Indexing — Multi-Representation, RAPTOR, ColBERT + CRAG & Adaptive RAG notes (Parts 12–17)
+
+**Summary:** I moved from *query-side* tricks to **indexing**, which is about how documents are stored so the right thing can be found. I ran **multi-representation indexing** end to end with Gemini (search over summaries, return full documents). I wrote up **RAPTOR** (hierarchical summary trees) as notes, and tried **ColBERT** with RAGatouille, which failed on an import error. Then I wrote notes on two "self-checking" RAG designs: **Corrective RAG (CRAG)** and **Adaptive RAG**.
+
+| Part | Technique | Idea in one line | Status in my notebook |
+|---|---|---|---|
+| 12 | Multi-representation indexing | Embed a **summary** of each doc; return the **full doc** it points to | Ran ✅ |
+| 13 | RAPTOR | Cluster and summarise chunks into a tree; index every level together | Notes only |
+| 14 | ColBERT (RAGatouille) | One embedding **per token**, scored with late interaction | Failed ❌ (`ModuleNotFoundError`) |
+| 16 | CRAG | Grade retrieved docs; keep, discard and web-search, or use both | Notes only |
+| 17 | Adaptive RAG | Classify the question's complexity first: no, single or multi-step retrieval | Notes only |
+
+(There's no Part 15 in my notebook; I numbered CRAG as 16.)
+
+### Part 12: Multi-representation indexing
+In my own words, from the notebook: when the store has lots of documents, each document gets **summarised**, and only the summary (plus a doc id) goes into the vector store. A question is embedded and matched against the summaries, then the doc id fetches the **full document** from a separate byte store. Use it when you want whole documents back, not chunks.
+
+```
+docs ──LLM summarise──→ summaries (+ doc_id) ──embed──→ Chroma  (search here)
+  └────────────────────── full docs keyed by doc_id ──→ InMemoryByteStore  (return from here)
+```
+
+- **Load:** two Lilian Weng posts ("LLM Powered Autonomous Agents" and "human data quality") with `WebBaseLoader`. That's 2 documents, with no splitting.
+- **Summarise:** `chain.batch(docs, {"max_concurrency": 5})` runs the summary chain on both docs in parallel. Gemini produced long, structured Markdown summaries.
+- **Store:**
+  ```python
+  mv_retriever = MultiVectorRetriever(
+      vectorstore=mv_vectorstore,          # Chroma collection "summaries"
+      byte_store=InMemoryByteStore(),      # full docs
+      id_key="doc_id",
+      search_kwargs={"k": 1},
+  )
+  mv_retriever.vectorstore.add_documents(summary_docs)        # summaries with metadata doc_id
+  mv_retriever.docstore.mset(list(zip(doc_ids, docs)))        # doc_id → full doc
+  ```
+- **Query "Memory in agents":**
+  - `mv_vectorstore.similarity_search(query, k=1)` returns the **summary** of the agents post, with its `doc_id` in the metadata.
+  - `mv_retriever.invoke(query)` returns the **full original page** for that id: the raw text starting "LLM Powered Autonomous Agents | Lil'Log… Table of Contents…".
+- **Moved to LangChain 1.x:**
+
+  | Tutorial | What I used |
+  |---|---|
+  | `from langchain.storage import InMemoryByteStore` | `from langchain_core.stores import InMemoryByteStore` |
+  | `from langchain.retrievers.multi_vector import MultiVectorRetriever` | `from langchain_classic.retrievers.multi_vector import MultiVectorRetriever` |
+  | `retriever.get_relevant_documents(q)` | `retriever.invoke(q)` |
+  | `n_results=1` | `search_kwargs={"k": 1}` |
+
+### Part 13: RAPTOR (hierarchical indexing): my notes
+- **Like a textbook:** pages (chunks), chapter summaries (clusters of related chunks), and a book summary (a summary of the chapter summaries).
+- **The problem it solves:** plain chunk RAG fails on **broad** questions ("what are the main themes?"), because no single chunk holds the big picture.
+- **How the tree is built:** embed → cluster by similarity → summarise each cluster → repeat on the summaries until there are few enough.
+  `63 chunks → 8 summaries → 3 summaries` = **74 nodes**, all indexed together (the **"collapsed tree"** approach). Broad questions match high-level summaries, and detailed questions match the original chunks.
+
+### Part 14: ColBERT with RAGatouille (failed)
+- **The idea:** instead of one vector per chunk, ColBERT keeps **one vector per token**. A query is scored by matching each query token to its best document token and adding up the matches ("late interaction"). This catches precise word-level matches that a single chunk vector can blur.
+- **What I set up:** `pip install -U ragatouille`, `RAGPretrainedModel.from_pretrained("colbert-ir/colbertv2.0")`, a Wikipedia API helper to fetch the "Hayao Miyazaki" article, `RAG.index(..., max_document_length=180, split_documents=True)`, then `RAG.as_langchain_retriever(k=3)`.
+- **Why it failed:** importing `ragatouille` raised **`ModuleNotFoundError: No module named 'langchain.retrievers'`**. RAGatouille 0.0.9 imports from the old LangChain layout, which LangChain 1.x removed. Because the import failed, `RAG` was never created, so the next two cells gave `NameError: name 'RAG' is not defined`.
+- The Wikipedia helper sends a descriptive `User-Agent`, as Wikipedia's API asks. I swapped the tutorial author's email for a placeholder.
+
+### Part 16: Corrective RAG (CRAG): my notes
+- **One line:** check the retrieved documents **before** using them, and correct course if they look bad.
+- A lightweight **retrieval evaluator** scores relevance → one of three actions:
+  ```
+  question → retrieve → GRADE the documents
+                           ├─ correct   → refine into relevant "knowledge strips" → generate
+                           ├─ incorrect → discard, use web search instead        → generate
+                           └─ ambiguous → use both                               → generate
+  ```
+- It's plug-and-play: the paper uses it alongside standard RAG and Self-RAG. The LangGraph versions usually grade with an LLM and fall back to query rewriting and web search.
+- **Trade-offs:** extra grading calls and latency, and it depends on the grader and on web search quality.
+
+### Part 17: Adaptive RAG: my notes
+- **One line:** decide **how much** retrieval a question needs before doing any.
+- A small classifier model predicts query complexity:
+  ```
+  question → CLASSIFY complexity
+                ├─ simple             → answer directly, no retrieval
+                ├─ medium             → one retrieve-and-answer step
+                └─ complex (multi-hop) → iterative retrieval, step by step
+  ```
+- The paper's example of a multi-hop question is "What currency is in Billy Giles' birthplace?" (find the birthplace, then the currency). Simple questions skip the expensive pipeline.
+
+### Gotchas (25 Nov)
+- **RAGatouille doesn't work with LangChain 1.x** (`langchain.retrievers` is gone). Options: a separate venv with `langchain<1`, or the newer PyLate backend that RAGatouille 0.0.10 is moving to (its own warning says so). Also, the install pulled in **torch, faiss, llama-index and colbert-ai**, which is a lot of extra size in `.venv`.
+- **The full doc returned in Part 12 is raw page text** with lots of blank lines, because this loader has no `bs4.SoupStrainer`. Add the same filter as in Part 1 for cleaner documents.
+- **`k=1` in Part 12** returns one whole document, so it's fine with only 2 docs, but with many docs use `k=2`–`3`.
+- **The `Chroma` deprecation warning** again: switch to the `langchain-chroma` package.
+- **Kernel restart between Parts 12 and 13:** the execution counts reset to 1 at Part 13, so Parts 13–14 ran in a fresh kernel. Any cell that uses `MODEL_ID`, `PROJECT_ID` and so on needs the setup cells run first.
+- Using `! pip install` in a notebook: `%pip install` installs into the kernel's own environment, which is safer.
+
+### Next time
+- [ ] Get ColBERT working: a separate venv with `langchain<1`, or try PyLate, then run the Miyazaki question.
+- [ ] Write the RAPTOR code (embed → cluster → summarise loop) instead of notes only.
+- [ ] Add `bs4.SoupStrainer` to the Part 12 loader and compare the full-doc output.
+- [ ] Build a small CRAG graph in **LangGraph**: an LLM grader → if it's irrelevant, rewrite the query and web-search.
+- [ ] Try a simple Adaptive RAG router: an LLM classifies a question as simple, medium or complex and picks the pipeline (reusing my Part 10 routing code).
